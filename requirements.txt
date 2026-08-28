@@ -1,0 +1,6 @@
+motor
+faster-whisper
+python-dotenv
+aiohttp
+yt_dlp
+requests
