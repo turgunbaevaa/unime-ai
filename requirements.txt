@@ -1,6 +1,5 @@
-motor
-faster-whisper
-python-dotenv
-aiohttp
-yt_dlp
-requests
+faster-whisper==1.2.1
+python-dotenv==1.2.1
+pymongo==4.13.2
+yt_dlp==2025.10.14
+requests==2.32.5
