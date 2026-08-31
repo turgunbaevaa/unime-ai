@@ -3,7 +3,12 @@ import subprocess
 
 import config
 from db import get_folders_collection, get_videos_collection
-from video_schema import build_folder, build_imported_video
+from video_schema import (
+    build_folder,
+    build_imported_video,
+    display_title,
+    parse_conference_part,
+)
 
 
 def _list_file():
@@ -12,14 +17,44 @@ def _list_file():
     return os.path.join(config.IMPORT_BASE_DIR, "Elenco video.txt")
 
 
-def _get_or_create_folder(folders_collection, raw_folder_name, topic, participants):
-    existing = folders_collection.find_one({"name": raw_folder_name})
+def _get_or_create_folder(folders_collection, conference_group, topic, participants):
+    existing = folders_collection.find_one({"name": conference_group})
     if existing:
         return existing["_id"]
-    result = folders_collection.insert_one(
-        build_folder(raw_folder_name, topic, participants)
+    return folders_collection.insert_one(
+        build_folder(conference_group, topic, participants)
+    ).inserted_id
+
+
+def _encode_vob_folder(found_path, output_filepath):
+    vob_files = [f for f in os.listdir(found_path) if f.endswith(".VOB")]
+    vob_files.sort()
+    if not vob_files:
+        return False, "no VOB files"
+
+    if os.path.isfile(output_filepath) and os.path.getsize(output_filepath) > 0:
+        return True, "already exists"
+
+    concat_string = "concat:" + "|".join(vob_files)
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-i", concat_string,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "28",
+        "-c:a", "aac", output_filepath,
+    ]
+    print("⏳ Encoding to MP4...")
+    result = subprocess.run(
+        ffmpeg_cmd,
+        cwd=found_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    return result.inserted_id
+    if (
+        result.returncode != 0
+        or not os.path.exists(output_filepath)
+        or os.path.getsize(output_filepath) == 0
+    ):
+        return False, f"ffmpeg return code {result.returncode}"
+    return True, "encoded"
 
 
 def process_archive():
@@ -31,10 +66,9 @@ def process_archive():
     print(f"   Source list: {txt_file}")
     print(f"   DVD root:    {base_dir}")
     print(f"   MP4 output:  {output_dir}")
+    print("   Grouping:    CD1/CD2 → one folder, separate videos per disc\n")
     if config.IMPORT_MAX_VIDEOS:
         print(f"   Limit:       {config.IMPORT_MAX_VIDEOS} video(s) (IMPORT_MAX_VIDEOS)\n")
-    else:
-        print()
 
     if not os.path.isfile(txt_file):
         print(f"❌ List file not found: {txt_file}")
@@ -67,9 +101,13 @@ def process_archive():
         raw_folder_name = parts[0].strip()
         topic = parts[1].strip()
         participants = parts[2].strip()
+        conference_group, conference_part, is_multi_disc = parse_conference_part(
+            raw_folder_name
+        )
+        catalog_title = display_title(topic, conference_part, is_multi_disc)
 
         if videos_collection.find_one({"original_folder": raw_folder_name}):
-            print(f"⏭️ Skipping (already in DB): {topic}")
+            print(f"⏭️ Skipping (already in DB): {catalog_title}")
             skipped += 1
             continue
 
@@ -84,58 +122,39 @@ def process_archive():
             failed += 1
             continue
 
-        vob_files = [f for f in os.listdir(found_path) if f.endswith(".VOB")]
-        vob_files.sort()
-        if not vob_files:
-            print(f"❌ No .VOB files in: {found_path}")
-            failed += 1
-            continue
-
-        print(f"\n✅ Processing: {topic}")
+        print(f"\n✅ Processing: {catalog_title}")
+        if is_multi_disc:
+            print(f"   conference: {conference_group} (part {conference_part})")
 
         output_filename = f"{raw_folder_name}.mp4"
         output_filepath = os.path.join(output_dir, output_filename)
 
-        if os.path.isfile(output_filepath) and os.path.getsize(output_filepath) > 0:
+        ok, reason = _encode_vob_folder(found_path, output_filepath)
+        if not ok:
+            print(f"❌ Encoding failed ({reason}). Skipping insert.")
+            failed += 1
+            continue
+        if reason == "already exists":
             print(f"⏭️ MP4 already exists, skipping encode: {output_filepath}")
-        else:
-            concat_string = "concat:" + "|".join(vob_files)
-            ffmpeg_cmd = [
-                "ffmpeg", "-y", "-i", concat_string,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "28",
-                "-c:a", "aac", output_filepath,
-            ]
-            print("⏳ Encoding to MP4...")
-            result = subprocess.run(
-                ffmpeg_cmd,
-                cwd=found_path,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if (
-                result.returncode != 0
-                or not os.path.exists(output_filepath)
-                or os.path.getsize(output_filepath) == 0
-            ):
-                print(f"❌ Encoding failed (return code {result.returncode}). Skipping insert.")
-                failed += 1
-                continue
 
         folder_id = _get_or_create_folder(
-            folders_collection, raw_folder_name, topic, participants
+            folders_collection, conference_group, topic, participants
         )
 
         print("💾 Saving folder + video to MongoDB...")
         video_doc = build_imported_video(
-            title=topic,
+            title=catalog_title,
             original_folder=raw_folder_name,
             participants=participants,
             media_path=output_filepath,
             folder_id=folder_id,
+            conference_group=conference_group,
+            conference_part=conference_part,
         )
         videos_collection.insert_one(video_doc)
         imported += 1
         print(f"🎉 Success! status=pending, folder_id={folder_id}")
+        print(f"   conference_group={conference_group}, part={conference_part}")
         print(f"   azure_stream_url={output_filepath}")
 
     print(f"\n📊 Done. imported={imported}, skipped={skipped}, failed={failed}")

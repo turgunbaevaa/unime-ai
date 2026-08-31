@@ -4,6 +4,7 @@ The worker is the source of truth for field names. This module only
 initializes documents so they are claimable and writable without gaps.
 """
 
+import re
 from datetime import datetime, timezone
 
 STATUS_PENDING = "pending"
@@ -42,11 +43,42 @@ def parse_authors(participants):
     return [name.strip() for name in participants.split(",") if name.strip()]
 
 
-def build_folder(original_folder, title, participants):
-    """Folder document for the folders collection."""
+_CD_SUFFIX = re.compile(r"(?:_CD| - CD|-CD)(\d+)$", re.IGNORECASE)
+
+
+def parse_conference_part(raw_folder_name):
+    """Split a DVD folder name into conference group and disc part.
+
+    Examples:
+        14-12-2011_..._Solvay_CD1  -> (14-12-2011_..._Solvay, 1, True)
+        23-5-2001 - CD2            -> (23-5-2001, 2, True)
+        26-05-2011_Aula_Magna_...  -> (26-05-2011_Aula_Magna_..., 1, False)
+
+    Returns (conference_group, conference_part, is_multi_disc).
+    """
+    name = (raw_folder_name or "").strip()
+    match = _CD_SUFFIX.search(name)
+    if match:
+        group = name[: match.start()].rstrip(" _-")
+        part = int(match.group(1))
+        return group, part, True
+    return name, 1, False
+
+
+def display_title(topic, conference_part, is_multi_disc):
+    """Catalog title; append part label when the row is one disc of a set."""
+    topic = (topic or "").strip()
+    if is_multi_disc and conference_part >= 1:
+        return f"{topic} (Part {conference_part})"
+    return topic
+
+
+def build_folder(conference_group, title, participants):
+    """Folder document for the folders collection (one per conference)."""
     now = utcnow()
     return {
-        "name": original_folder,
+        "name": conference_group,
+        "conference_group": conference_group,
         "title": title,
         "participants": participants,
         "authors": parse_authors(participants),
@@ -71,7 +103,15 @@ def initial_ai_processing(status=STATUS_PENDING):
     }
 
 
-def build_imported_video(title, original_folder, participants, media_path, folder_id):
+def build_imported_video(
+    title,
+    original_folder,
+    participants,
+    media_path,
+    folder_id,
+    conference_group,
+    conference_part,
+):
     """Catalog + worker document after VOB→MP4 import."""
     now = utcnow()
     return {
@@ -80,6 +120,8 @@ def build_imported_video(title, original_folder, participants, media_path, folde
         "participants": participants,
         "authors": parse_authors(participants),
         "folder_id": str(folder_id),
+        "conference_group": conference_group,
+        "conference_part": conference_part,
         "azure_stream_url": media_path,
         "local_filepath": media_path,
         "tags": [],

@@ -1,21 +1,27 @@
 """Link legacy import videos to folders for the catalog UI.
 
-Run once after upgrading from imports that only set original_folder /
-participants (no folder_id or authors). Does not re-encode or reset AI jobs.
+Groups CD1/CD2 rows under one folder (conference_group). Does not re-encode
+or reset AI jobs.
 """
 
 from bson import ObjectId
 
 from db import get_folders_collection, get_videos_collection
-from video_schema import build_folder, parse_authors, utcnow
+from video_schema import (
+    build_folder,
+    display_title,
+    parse_authors,
+    parse_conference_part,
+    utcnow,
+)
 
 
-def _get_or_create_folder(folders_collection, raw_folder_name, title, participants):
-    existing = folders_collection.find_one({"name": raw_folder_name})
+def _get_or_create_folder(folders_collection, conference_group, title, participants):
+    existing = folders_collection.find_one({"name": conference_group})
     if existing:
         return existing["_id"]
     return folders_collection.insert_one(
-        build_folder(raw_folder_name, title, participants)
+        build_folder(conference_group, title, participants)
     ).inserted_id
 
 
@@ -26,6 +32,8 @@ def _needs_migration(video):
     if isinstance(folder_id, ObjectId):
         return True
     if not video.get("authors"):
+        return True
+    if not video.get("conference_group"):
         return True
     return False
 
@@ -41,6 +49,7 @@ def migrate_catalog_links(dry_run=False):
             {"folder_id": {"$type": "objectId"}},
             {"authors": {"$exists": False}},
             {"authors": []},
+            {"conference_group": {"$exists": False}},
         ],
     }
 
@@ -53,7 +62,7 @@ def migrate_catalog_links(dry_run=False):
     for video in candidates:
         vid = video["_id"]
         original_folder = video.get("original_folder", "").strip()
-        title = video.get("title") or original_folder
+        topic = video.get("title") or original_folder
         participants = video.get("participants") or ""
 
         if not original_folder:
@@ -65,8 +74,17 @@ def migrate_catalog_links(dry_run=False):
             skipped += 1
             continue
 
+        conference_group, conference_part, is_multi_disc = parse_conference_part(
+            original_folder
+        )
+        # Strip old "(Part N)" suffix if title was already migrated once.
+        base_topic = topic
+        if " (Part " in base_topic:
+            base_topic = base_topic.rsplit(" (Part ", 1)[0]
+        catalog_title = display_title(base_topic, conference_part, is_multi_disc)
+
         folder_oid = _get_or_create_folder(
-            folders, original_folder, title, participants
+            folders, conference_group, base_topic, participants
         )
         folder_id = str(folder_oid)
         authors = video.get("authors") or parse_authors(participants)
@@ -74,6 +92,9 @@ def migrate_catalog_links(dry_run=False):
         patch = {
             "folder_id": folder_id,
             "authors": authors,
+            "conference_group": conference_group,
+            "conference_part": conference_part,
+            "title": catalog_title,
             "updated_at": utcnow(),
         }
         if "is_deleted" not in video:
@@ -84,8 +105,9 @@ def migrate_catalog_links(dry_run=False):
             patch["opac_export"] = {"is_exported": False}
 
         print(f"{'[dry-run] ' if dry_run else ''}Link {vid}")
-        print(f"   title: {title}")
-        print(f"   folder: {original_folder} → folder_id={folder_id}")
+        print(f"   title: {catalog_title}")
+        print(f"   {original_folder} → group={conference_group}, part={conference_part}")
+        print(f"   folder_id={folder_id}")
 
         if not dry_run:
             videos.update_one({"_id": vid}, {"$set": patch})
