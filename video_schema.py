@@ -79,7 +79,7 @@ def build_imported_video(title, original_folder, participants, media_path, folde
         "original_folder": original_folder,
         "participants": participants,
         "authors": parse_authors(participants),
-        "folder_id": folder_id,
+        "folder_id": str(folder_id),
         "azure_stream_url": media_path,
         "local_filepath": media_path,
         "tags": [],
