@@ -44,6 +44,26 @@ def parse_authors(participants):
 
 
 _CD_SUFFIX = re.compile(r"(?:_CD| - CD|-CD)(\d+)$", re.IGNORECASE)
+_DATE_IN_NAME = re.compile(r"(\d{1,2})-(\d{1,2})-(\d{4})")
+
+
+def normalize_folder_key(name):
+    """Normalize folder names so txt rows can match on-disk DVD folders.
+
+    Handles date zero-padding, CD suffix variants, spaces vs underscores.
+    """
+    key = (name or "").strip().lower()
+    key = _CD_SUFFIX.sub(lambda m: f"_cd{m.group(1)}", key)
+
+    def _pad_date(match):
+        day, month, year = match.groups()
+        return f"{int(day):02d}-{int(month):02d}-{year}"
+
+    key = _DATE_IN_NAME.sub(_pad_date, key)
+    key = key.replace(" - ", "_")
+    key = re.sub(r"\s+", "_", key)
+    key = re.sub(r"_+", "_", key).strip("_")
+    return key
 
 
 def parse_conference_part(raw_folder_name):

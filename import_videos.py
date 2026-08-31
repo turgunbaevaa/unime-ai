@@ -7,14 +7,50 @@ from video_schema import (
     build_folder,
     build_imported_video,
     display_title,
+    normalize_folder_key,
     parse_conference_part,
 )
+
+_HEADER_HINTS = ("nomi cd", "titolo", "data, titolo", "nome cartella")
 
 
 def _list_file():
     if config.IMPORT_LIST_FILE:
         return config.IMPORT_LIST_FILE
     return os.path.join(config.IMPORT_BASE_DIR, "Elenco video.txt")
+
+
+def _is_list_header(raw_folder_name, topic):
+    combined = f"{raw_folder_name} {topic}".lower()
+    return any(hint in combined for hint in _HEADER_HINTS)
+
+
+def _build_disk_folder_index(base_dir):
+    by_exact = {}
+    by_normalized = {}
+    for root, dirs, _files in os.walk(base_dir):
+        for name in dirs:
+            path = os.path.join(root, name)
+            by_exact[name] = path
+            norm = normalize_folder_key(name)
+            by_normalized.setdefault(norm, []).append((name, path))
+    return by_exact, by_normalized
+
+
+def _resolve_dvd_folder(raw_folder_name, by_exact, by_normalized):
+    """Return (path, disk_folder_name, was_corrected) or (None, None, False)."""
+    if raw_folder_name in by_exact:
+        return by_exact[raw_folder_name], raw_folder_name, False
+
+    norm = normalize_folder_key(raw_folder_name)
+    matches = by_normalized.get(norm, [])
+    if len(matches) == 1:
+        disk_name, path = matches[0]
+        return path, disk_name, disk_name != raw_folder_name
+    if len(matches) > 1:
+        names = ", ".join(m[0] for m in matches)
+        print(f"❌ Ambiguous folder match for '{raw_folder_name}': {names}")
+    return None, None, False
 
 
 def _get_or_create_folder(folders_collection, conference_group, topic, participants):
@@ -66,7 +102,8 @@ def process_archive():
     print(f"   Source list: {txt_file}")
     print(f"   DVD root:    {base_dir}")
     print(f"   MP4 output:  {output_dir}")
-    print("   Grouping:    CD1/CD2 → one folder, separate videos per disc\n")
+    print("   Grouping:    CD1/CD2 → one folder, separate videos per disc")
+    print("   Matching:    exact name, then normalized (dates/spaces/CD)\n")
     if config.IMPORT_MAX_VIDEOS:
         print(f"   Limit:       {config.IMPORT_MAX_VIDEOS} video(s) (IMPORT_MAX_VIDEOS)\n")
 
@@ -78,10 +115,12 @@ def process_archive():
     videos_collection = get_videos_collection()
     folders_collection = get_folders_collection()
     os.makedirs(output_dir, exist_ok=True)
+    by_exact, by_normalized = _build_disk_folder_index(base_dir)
 
     imported = 0
     skipped = 0
     failed = 0
+    corrected = 0
 
     with open(txt_file, "r", encoding="utf-8") as file:
         lines = file.readlines()
@@ -101,6 +140,10 @@ def process_archive():
         raw_folder_name = parts[0].strip()
         topic = parts[1].strip()
         participants = parts[2].strip()
+
+        if _is_list_header(raw_folder_name, topic):
+            continue
+
         conference_group, conference_part, is_multi_disc = parse_conference_part(
             raw_folder_name
         )
@@ -111,22 +154,23 @@ def process_archive():
             skipped += 1
             continue
 
-        found_path = None
-        for root, dirs, files in os.walk(base_dir):
-            if raw_folder_name in dirs:
-                found_path = os.path.join(root, raw_folder_name)
-                break
-
+        found_path, disk_folder_name, was_corrected = _resolve_dvd_folder(
+            raw_folder_name, by_exact, by_normalized
+        )
         if not found_path:
             print(f"❌ Folder not found on disk: {raw_folder_name}")
             failed += 1
             continue
 
+        if was_corrected:
+            corrected += 1
+            print(f"📎 Matched txt '{raw_folder_name}' → disk '{disk_folder_name}'")
+
         print(f"\n✅ Processing: {catalog_title}")
         if is_multi_disc:
             print(f"   conference: {conference_group} (part {conference_part})")
 
-        output_filename = f"{raw_folder_name}.mp4"
+        output_filename = f"{disk_folder_name}.mp4"
         output_filepath = os.path.join(output_dir, output_filename)
 
         ok, reason = _encode_vob_folder(found_path, output_filepath)
@@ -157,7 +201,10 @@ def process_archive():
         print(f"   conference_group={conference_group}, part={conference_part}")
         print(f"   azure_stream_url={output_filepath}")
 
-    print(f"\n📊 Done. imported={imported}, skipped={skipped}, failed={failed}")
+    print(
+        f"\n📊 Done. imported={imported}, skipped={skipped}, "
+        f"corrected={corrected}, failed={failed}"
+    )
 
 
 if __name__ == "__main__":
