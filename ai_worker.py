@@ -5,6 +5,13 @@ import uuid
 import time
 from datetime import timedelta
 
+try:
+    import torch
+    torch_lib_path = os.path.join(os.path.dirname(torch.__file__), "lib")
+    os.environ["PATH"] = torch_lib_path + os.pathsep + os.environ.get("PATH", "")
+except ImportError:
+    pass
+
 import config
 import requests
 import yt_dlp

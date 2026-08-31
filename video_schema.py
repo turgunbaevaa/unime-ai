@@ -35,6 +35,26 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def parse_authors(participants):
+    """Split 'Name A, Name B' into an authors array for the catalog API."""
+    if not participants or not isinstance(participants, str):
+        return []
+    return [name.strip() for name in participants.split(",") if name.strip()]
+
+
+def build_folder(original_folder, title, participants):
+    """Folder document for the folders collection."""
+    now = utcnow()
+    return {
+        "name": original_folder,
+        "title": title,
+        "participants": participants,
+        "authors": parse_authors(participants),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
 def initial_ai_processing(status=STATUS_PENDING):
     """Nested ai_processing object expected by the worker."""
     return {
@@ -51,19 +71,20 @@ def initial_ai_processing(status=STATUS_PENDING):
     }
 
 
-def build_imported_video(title, original_folder, participants, media_path):
-    """Catalog document the AI worker can claim and process.
-
-    azure_stream_url is set to the local converted file because that is the
-    only media field the worker reads. local_filepath is kept as metadata.
-    """
+def build_imported_video(title, original_folder, participants, media_path, folder_id):
+    """Catalog + worker document after VOB→MP4 import."""
     now = utcnow()
     return {
         "title": title,
         "original_folder": original_folder,
         "participants": participants,
+        "authors": parse_authors(participants),
+        "folder_id": folder_id,
         "azure_stream_url": media_path,
         "local_filepath": media_path,
+        "tags": [],
+        "is_deleted": False,
+        "opac_export": {"is_exported": False},
         "created_at": now,
         "updated_at": now,
         "ai_processing": initial_ai_processing(STATUS_PENDING),

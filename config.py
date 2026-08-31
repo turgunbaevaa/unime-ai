@@ -20,6 +20,16 @@ def _int(name, default):
 MONGO_URI = _str("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = _str("MONGO_DB_NAME", "unime_video_catalog")
 MONGO_COLLECTION = _str("MONGO_COLLECTION", "videos")
+FOLDERS_COLLECTION = _str("FOLDERS_COLLECTION", "folders")
+
+# Archive import (import_videos.py)
+IMPORT_BASE_DIR = _str(
+    "IMPORT_BASE_DIR",
+    r"C:\Users\ciam\unime.it\Part-Time Multimedia - Backup_CD",
+)
+IMPORT_OUTPUT_DIR = _str("IMPORT_OUTPUT_DIR", r"C:\UniMe-AI\converted_videos")
+IMPORT_LIST_FILE = _str("IMPORT_LIST_FILE", "")  # empty → {IMPORT_BASE_DIR}/Elenco video.txt
+IMPORT_MAX_VIDEOS = _int("IMPORT_MAX_VIDEOS", 0)  # 0 = no limit; set 1 to test one video
 
 # Whisper / faster-whisper
 DEVICE = _str("DEVICE", "cuda").lower()
